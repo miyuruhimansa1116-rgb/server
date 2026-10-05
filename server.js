@@ -2,7 +2,17 @@ const qrcode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const express = require('express');
 const cors = require('cors'); // CORS එකතු කිරීම
+const { exec } = require('child_process');
+const admin = require('firebase-admin');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+
+// ඔබගේ Firebase service account credential JSON එක මෙහි ලෝඩ් කරගත යුතුය (অথবা environment variables මඟින්)
+// const serviceAccount = require('./path-to-firebase-key.json');
+// admin.initializeApp({
+//     credential: admin.credential.cert(serviceAccount)
+// });
+
+const db = admin.firestore();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,6 +54,35 @@ async function startWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 }
+
+// 1. WhatsApp සර්වර් එක සහ Pinggy එක එකට ස්ටාර්ට් කිරීම සහ Auto-URL Detect කිරීම
+const tunnel = exec('npx pinggy -p 3000');
+
+tunnel.stdout.on('data', async (data) => {
+    // Pinggy අවුಟ್‌පුට් එකෙන් https://xxx.free.pinggy.link හෝ .net ලින්ක් එක තෝරා ගැනීම
+    const match = data.match(/https:\/\/[a-zA-Z0-9-]+\.free\.pinggy\.(link|net)/);
+    if (match) {
+        const publicUrl = match[0];
+        console.log(`[Auto-URL] අලුත් Pinggy URL එක හමුවුණා: ${publicUrl}`);
+
+        try {
+            // 2. Firebase Database එකේ settings -> whatsapp_config එක ඇතුළට මේ URL එක ඔටෝ සේව් කිරීම
+            await db.collection('settings').doc('whatsapp_config').set({
+                serverUrl: publicUrl,
+                updatedAt: new Date()
+            }, { merge: true });
+            
+            console.log('[Auto-URL] Firebase වෙත සාර්ථකව URL එක අප්ඩේට් විය!');
+        } catch (error) {
+            console.error('[Auto-URL] Firebase අප්ඩේට් වීමේ දෝෂයක්:', error);
+        }
+    }
+});
+
+tunnel.stderr.on('data', (data) => {
+    // කිසියම් එරර් එකක් ඇත්නම්
+    // console.error(`Tunnel Error: ${data}`);
+});
 
 // POS වෙබ් ඇප් එකෙන් බිල් මැසේජ් එක යැවීමට අදාළ Endpoint එක
 app.post('/send-message', async (req, res) => {
