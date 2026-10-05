@@ -1,82 +1,55 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const qrcode = require('qrcode');
 const express = require('express');
-const cors = require('cors');
-const qrcode = require('qrcode-terminal');
-
+const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const app = express();
-app.use(express.json());
-app.use(cors());
+const PORT = process.env.PORT || 3000;
 
-let sock;
-let connectionStatus = "disconnected";
+let latestQR = '';
 
-// සර්වර් එක නිදාගැනීම (Sleep) වැළැක්වීමට සහ තත්ත්වය බැලීමට Ping route එකක්
-app.get('/ping', (req, res) => {
-    res.json({ status: "online", connection: connectionStatus });
-});
-
-async function connectToWhatsApp() {
+async function startWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-
-    sock = makeWASocket({
+    const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true
+        printQRInTerminal: false // ටර්මිනල් එකේ පෙන්වීම නවත්වයි
+    });
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, qr } = update;
+        if (qr) {
+            latestQR = qr; // QR කෝඩ් ස්ට්‍රින්ග් එක සේව් කරගනී
+        }
+        if (connection === 'open') {
+            console.log('WhatsApp Connected Successfully!');
+            latestQR = '';
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        
-        if (qr) {
-            qrcode.generate(qr, { small: true });
-        }
-
-        if (connection === 'close') {
-            connectionStatus = "disconnected";
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed. Reconnecting...', shouldReconnect);
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            }
-        } else if (connection === 'open') {
-            connectionStatus = "connected";
-            console.log('WhatsApp connected successfully to 0775431562!');
-        }
-    });
 }
 
-// මැසේජ් යවන API Endpoint එක
-app.post('/send-message', async (req, res) => {
+// බ්‍රව්සරයෙන් QR කෝඩ් එක බලාගන්න එන්ඩ්පොයින්ට් එකක්
+app.get('/qr', async (req, res) => {
+    if (!latestQR) {
+        return res.send('<h3>WhatsApp is already connected or QR is not generated yet!</h3>');
+    }
     try {
-        const { phone, message } = req.body;
-
-        if (!phone || !message) {
-            return res.status(400).json({ success: false, error: "Phone and message are required" });
-        }
-
-        if (connectionStatus !== "connected") {
-            return res.status(500).json({ success: false, error: "WhatsApp is not connected yet. Please scan QR." });
-        }
-
-        // දුරකථන අංකය නිවැරදි ෆෝමැට් එකට සැකසීම (077... -> 9477... @s.whatsapp.net)
-        let formattedPhone = phone.replace(/[^0-9]/g, '');
-        if (formattedPhone.startsWith('0')) {
-            formattedPhone = '94' + formattedPhone.slice(1);
-        }
-        const jid = formattedPhone + '@s.whatsapp.net';
-
-        await sock.sendMessage(jid, { text: message });
-
-        res.json({ success: true, message: "Message sent successfully!" });
-    } catch (error) {
-        console.error("Error sending message:", error);
-        res.status(500).json({ success: false, error: error.message });
+        const urlImage = await qrcode.toDataURL(latestQR);
+        res.send(`
+            <div style="text-align: center; margin-top: 50px;">
+                <h2>Scan this QR Code with WhatsApp</h2>
+                <img src="${urlImage}" alt="WhatsApp QR Code" style="width: 300px; height: 300px;" />
+            </div>
+        `);
+    } catch (err) {
+        res.status(500).send('Error generating QR code');
     }
 });
 
-const PORT = process.env.PORT || 3001;
+app.get('/ping', (req, res) => {
+    res.send('Pong! Server is awake.');
+});
+
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    connectToWhatsApp();
+    console.log(`Server is running on port ${PORT}`);
+    startWhatsApp();
 });
