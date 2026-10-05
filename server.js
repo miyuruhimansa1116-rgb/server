@@ -1,6 +1,7 @@
 const qrcode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -10,15 +11,26 @@ async function startWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false // ටර්මිනල් එකේ පෙන්වීම නවත්වයි
+        printQRInTerminal: true
     });
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, qr } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
         if (qr) {
-            latestQR = qr; // QR කෝඩ් ස්ට්‍රින්ග් එක සේව් කරගනී
+            latestQR = qr;
+            qrcodeTerminal.generate(qr, { small: true });
         }
-        if (connection === 'open') {
+        
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
+            console.log('Connection closed due to ', lastDisconnect?.error, ', reconnecting ', shouldReconnect);
+            
+            // 515 එරර් එකක් හෝ වෙනත් බිඳ වැටීමක් ආවොත් ස්වයංක්‍රීයව නැවත පණගන්වයි
+            if (shouldReconnect) {
+                startWhatsApp();
+            }
+        } else if (connection === 'open') {
             console.log('WhatsApp Connected Successfully!');
             latestQR = '';
         }
@@ -27,7 +39,6 @@ async function startWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 }
 
-// බ්‍රව්සරයෙන් QR කෝඩ් එක බලාගන්න එන්ඩ්පොයින්ට් එකක්
 app.get('/qr', async (req, res) => {
     if (!latestQR) {
         return res.send('<h3>WhatsApp is already connected or QR is not generated yet!</h3>');
